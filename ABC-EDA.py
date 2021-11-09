@@ -229,7 +229,7 @@ def improve(graph, solution):
             tmp = solution.copy()
             tmp.remove(node)
             if nx.is_dominating_set(graph, tmp) == True:
-                R.append(node)
+                redundant_nodes.append(node)
 
 #generates solution by randomly adding nodes
 def init(graph):
@@ -252,39 +252,44 @@ def init_pop(graph, population_size, edge_list):
     best_solution = solutions[min(fitness_scores, key=fitness_scores.get)]
     return solutions, best_solution
 
-def emp_bee_phase(
-        graph, 
-        solutions, 
-        edge_list, 
-        max_trials, 
-        best_iteration, 
-        probability_vector, mu1, mu2, population_size, beta):
+def emp_bee_phase(graph, solutions, edge_list, max_trials, best_iteration, probability_vector, mu1, mu2, population_size, beta):
     trials_with_no_change = 0
     for i in range(0,population_size):
         index = i
-        trials_with_no_change += 1
+        trials_with_no_change = 0
         mutated_solution = guided_mutation(graph, solutions[index], probability_vector, beta)
         repair(graph, mutated_solution)
         improve(graph, mutated_solution)
         if fitness(mutated_solution, edge_list) < fitness(solutions[index], edge_list):
             solutions[index] = mutated_solution
-            trials_with_no_change = 0
-        elif trials_with_no_change == max_trials:
-            solutions = scout_bee_phase(graph, solutions, index, best_iteration, mu1, mu2)
-        if fitness(solutions[index], edge_list) < fitness(best_iteration, edge_list):
-            best_iteration = solutions[index]
+            if fitness(solutions[index], edge_list) < fitness(best_iteration, edge_list):
+                best_iteration = solutions[index]
+        else:
+            trials_with_no_change += 1
+        while trials_with_no_change <= max_trials:
+            mutated_solution = guided_mutation(graph, solutions[index], probability_vector, beta)
+            repair(graph, mutated_solution)
+            improve(graph, mutated_solution)
+            if fitness(mutated_solution, edge_list) < fitness(solutions[index], edge_list):
+                solutions[index] = mutated_solution
+                trials_with_no_change = 0
+                if fitness(solutions[index], edge_list) < fitness(best_iteration, edge_list):
+                    best_iteration = solutions[index]
+            else:
+                trials_with_no_change += 1
+        solutions[index] = scout_bee_phase(graph, solutions, index, best_iteration, mu1, mu2)
     return solutions, best_iteration
 
 def scout_bee_phase(graph, solutions, index, best_iteration, mu1, mu2):
     if random() < mu1:
-        solutions[index] = init(graph)
+        new_solution = init(graph)
     else:
-        solutions[index] = []
+        new_solution = []
         for node in best_iteration:
             if random() < mu2:
-                solutions[index].append(node)
-        repair(graph, solutions[index])
-    return solutions
+                new_solution.append(node)
+        repair(graph, new_solution)
+    return new_solution
 
 def onlooker_bee_phase(
         solutions, graph, edge_list, probability_vector, best_iteration, onlooker_bees, beta):
@@ -317,7 +322,7 @@ def random_heuristic_node(graph, solution):
         vertex[node]['degree'] = graph.degree(node)
         vertex[node]['weight_sum_of_non_dominated_neighbors'] = 0
         for neighbor in undominated_neighbors:
-            vertex[node]['weight_sum_of_non_dominated_neighbors'] += graph[node][neighbor]['weight']
+            vertex[node]['weight_sum_of_non_dominated_neighbors'] += graph.degree(neighbor, 'weight')
     for node in vertex:
         heuristics[1][node] = vertex[node]['degree']/vertex[node]['weight_sum']
         heuristics[2][node] = vertex[node]['weight_sum_of_non_dominated_neighbors']/vertex[node]['weight_sum']
@@ -325,16 +330,15 @@ def random_heuristic_node(graph, solution):
     return max(heuristics[random_choice], key=heuristics[random_choice].get)
 
 def heuristic_improv(graph, solution):
-    heuristics = {1:{}}
-    V = solution
+    heuristics = {}
     vertex = {}
-    for node in V:
+    for node in solution:
         vertex[node] = {}
         vertex[node]['weight_sum'] = graph.degree(node, 'weight')
         vertex[node]['degree'] = graph.degree(node)
     for node in vertex:
-        heuristics[1][node] = vertex[node]['weight_sum']/vertex[node]['degree']
-    return max(heuristics[1], key=heuristics[1].get)
+        heuristics[node] = vertex[node]['weight_sum']/vertex[node]['degree']
+    return max(heuristics, key=heuristics.get)
 
 def test_output(test_n, edge_list):
     output = {}
