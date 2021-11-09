@@ -4,46 +4,62 @@ Created on Wed Oct 27 11:35:05 2021
 
 @author: Jahn Zhong
 """
+"""
+Probability parameters:
+    
+beta:               proportion of nodes sampled from probability vector instead of previous generation for guided mutation
+lmbda:              
+small_value:        probability of nodes not counted when initializing probability vector
+mu1:                probability of completely abandoning solution and generating a new one 
+mu2:                closeness of new solution during scout bee phase if solution not completely abandoned
+-----------------------------------------------------------------------------------------------------------------------------
+Other parameters
+
+max_iterations:     Iteration number of main algorithm; has biggest impact on solution quality
+population_size:    number of random solutions to evaluate
+d:                  population_size/d best solutions used to generate and update probability distribution vector
+max_trials:         Higher number --> Deeper solutions exploration in employed bee phase
+onlooker_bees:      Number of bees generating neighboring solutions from previous emplyed bee phase
+
+"""
+
+
 import networkx as nx
 from random import choice, random, seed
 from collections import Counter
 import os
 import ray
-import time
 import numpy
-import sys
 import pandas as pd
 from operator import itemgetter
-
+from pathlib import Path
 
 def main():                  
     #Setup
     ray.init(num_cpus=8)
-    input_dir = 'fv'
+    input_dir = 'test'
     graphs = get_graphs(input_dir)
-    edge_lists = get_edge_lists(graphs)
-    subgraphs = get_subgraphs(graphs, edge_lists)
-    """
-    beta:               proportion of nodes sampled from probability vector instead of previous generation for guided mutation
-    lmbda = 0.6
-    small_value:        probability of nodes not counted when initializing probability vector
-    population_size:    number of random solutions to evaluate
-    best_n:             n best solutions used for parent of next generation
-    max_iterations:     Number of iterations of algorithm
-    max_trials:
-    onlooker_bees: 
-    mu1:                probability of completely abandoning solution and generating a new one 
-    mu2:                closeness of new result during scout bee phase if not completely abandoned
-    """
     graphs_with_isolated = get_graph_with_isolated(input_dir)
     isolated_nodes = get_isolated_nodes(graphs_with_isolated)
-    print('calculating mds')
     mds_dict = get_mds(graphs)
-    print('done')
     doublets = get_doublets(graphs, mds_dict)
     remove_doublets(graphs, mds_dict)
     analyze(graphs, mds_dict, isolated_nodes, doublets, input_dir)
     ray.shutdown()
+
+def analyze(graphs, ds, isol_nodes, double_list, directory):
+    output_dir = "output"
+    Path(output_dir).mkdir(parents = True, exist_ok = True, mode = 0o666)
+    with open(output_dir + '{path}_ds.csv'.format(path = directory), 'w') as file:
+        file.write("subset_threshold, dominating_set, doublets, isolated_nodes\n")
+        for graph in ds.keys():
+            ds_list = str(ds[graph])
+            ds_list = "\"" + ds_list[1: len(ds_list) - 1] + "\""
+            doubles_list = str(double_list[graph])
+            doubles_list = "\"" + doubles_list[1: len(doubles_list) - 1] + "\""
+            isol_list = str(isol_nodes[graph])
+            isol_list = "\"" + isol_list[1: len(isol_list) - 1] + "\""
+            file.write("%s,%s,%s,%s\n"%(graph,ds_list, doubles_list, isol_list))
 
 def get_subgraphs(graphs, edge_lists):
     subgraphs = {}
@@ -89,7 +105,6 @@ def remove_doublets(graphs,ds):
                     if node in ds[graph]:
                         ds[graph].remove(node)
     
-    
 def get_edge_lists(graphs):
     if type(graphs) is dict:
         edge_lists = {graph: nx.to_pandas_edgelist(graphs[graph], source = 'Parm1', target = 'Parm2') for graph in graphs}
@@ -125,13 +140,14 @@ def get_isolated_nodes(graphs):
     for i in graphs:
         isol_nodes[i] = list(nx.isolates(graphs[i]))
     return isol_nodes
+
 @ray.remote
 def abc_eda(
         graph, edge_list, population_size, max_iterations, max_trials, 
         onlooker_bees,  d, beta, lmbda, mu1, mu2, small_value):
     seed()
     best_n = int(round(population_size/d))
-    population, fitness_scores, best_solution = init_pop(graph, population_size, edge_list)
+    population, best_solution = init_pop(graph, population_size, edge_list)
     best_iteration = best_solution.copy()
     probability_vector = init_prob_v(graph, population, best_n, small_value)
     iterations = 1
@@ -174,6 +190,7 @@ def init_prob_v(graph, solutions, best_n, small_value):
             probability_vector[node] = float(small_value)
     return probability_vector
 
+#Updates probability vector based on 
 def update_prob_v(solutions, probability_vector, edge_list, lmbda, best_n):
     solution_quality = {key: fitness(solutions[key], edge_list) for key, value in solutions.items()}
     tmp_dict = dict(sorted(solution_quality.items(),key = itemgetter(1))[:best_n])
@@ -186,84 +203,93 @@ def update_prob_v(solutions, probability_vector, edge_list, lmbda, best_n):
         if node in occurences.keys():
             probability_vector[node] =  (1-lmbda)*probability_vector[node] + lmbda*(occurences[node]/best_n)
     return probability_vector
-                                                                                    
+
+#Evaluates fitness by sum of edge weights associated                                                                                     
 def fitness(solution, edge_list):
     fitness_score = edge_list.loc[edge_list['Parm2'].isin(solution) + edge_list['Parm1'].isin(solution), 'weight'].sum()
     return fitness_score
 
+#Adds nodes to solution until solution is dominating set
 def repair(graph, solution):
     while nx.is_dominating_set(graph, solution) == False:
         solution.append(random_heuristic_node(graph, solution))
 
+#Removes redundant nodes
 def improve(graph, solution):
-    R = []
+    redundant_nodes = []
     for node in solution:
         tmp = solution.copy()
         tmp.remove(node)
         if nx.is_dominating_set(graph, tmp) == True:
-            R.append(node)
-    while R != []:
-        solution.remove(heuristic_improv(graph, R))
-        R = []
+            redundant_nodes.append(node)
+    while redundant_nodes != []:
+        solution.remove(heuristic_improv(graph, redundant_nodes))
+        redundant_nodes = []
         for node in solution:
             tmp = solution.copy()
             tmp.remove(node)
             if nx.is_dominating_set(graph, tmp) == True:
-                R.append(node)
+                redundant_nodes.append(node)
 
+#generates solution by randomly adding nodes
 def init(graph):
-    solution = []
+    solution = set()
+    remaining_nodes = set(graph.nodes())
     while nx.is_dominating_set(graph, solution) == False:
-        solution.append(choice(list(graph.nodes())))
-    return solution
-     
+        random_node = choice(list(remaining_nodes))
+        solution.add(random_node)
+        remaining_nodes.remove(random_node)        
+    return list(solution)
+
+#Generates initial solutions and returns best solution among them  
 def init_pop(graph, population_size, edge_list):
-    solutions = {}
-    fitness_scores = {}
+    solutions = {i: init(graph) for i in range(2, population_size)}
     solutions[0] = []
     repair(graph, solutions[0])
     solutions[1] = list(graph.nodes())
     improve(graph, solutions[1])
-    for i in range(2, population_size):
-        solutions[i] = init(graph)
-    for solution in solutions:
-        fitness_scores[solution] = fitness(solutions[solution], edge_list)
+    fitness_scores = {solution: fitness(solutions[solution], edge_list) for solution in solutions}
     best_solution = solutions[min(fitness_scores, key=fitness_scores.get)]
-    return solutions, fitness_scores, best_solution
+    return solutions, best_solution
 
-def emp_bee_phase(
-        graph, 
-        solutions, 
-        edge_list, 
-        max_trials, 
-        best_iteration, 
-        probability_vector, mu1, mu2, population_size, beta):
+def emp_bee_phase(graph, solutions, edge_list, max_trials, best_iteration, probability_vector, mu1, mu2, population_size, beta):
     trials_with_no_change = 0
     for i in range(0,population_size):
         index = i
-        trials_with_no_change += 1
+        trials_with_no_change = 0
         mutated_solution = guided_mutation(graph, solutions[index], probability_vector, beta)
         repair(graph, mutated_solution)
         improve(graph, mutated_solution)
         if fitness(mutated_solution, edge_list) < fitness(solutions[index], edge_list):
             solutions[index] = mutated_solution
-            trials_with_no_change = 0
-        elif trials_with_no_change == max_trials:
-            solutions = scout_bee_phase(graph, solutions, index, best_iteration, mu1, mu2)
-        if fitness(solutions[index], edge_list) < fitness(best_iteration, edge_list):
-            best_iteration = solutions[index]
+            if fitness(solutions[index], edge_list) < fitness(best_iteration, edge_list):
+                best_iteration = solutions[index]
+        else:
+            trials_with_no_change += 1
+        while trials_with_no_change <= max_trials:
+            mutated_solution = guided_mutation(graph, solutions[index], probability_vector, beta)
+            repair(graph, mutated_solution)
+            improve(graph, mutated_solution)
+            if fitness(mutated_solution, edge_list) < fitness(solutions[index], edge_list):
+                solutions[index] = mutated_solution
+                trials_with_no_change = 0
+                if fitness(solutions[index], edge_list) < fitness(best_iteration, edge_list):
+                    best_iteration = solutions[index]
+            else:
+                trials_with_no_change += 1
+        solutions[index] = scout_bee_phase(graph, solutions, index, best_iteration, mu1, mu2)
     return solutions, best_iteration
 
 def scout_bee_phase(graph, solutions, index, best_iteration, mu1, mu2):
     if random() < mu1:
-        solutions[index] = init(graph)
+        new_solution = init(graph)
     else:
-        solutions[index] = []
+        new_solution = []
         for node in best_iteration:
             if random() < mu2:
-                solutions[index].append(node)
-        repair(graph, solutions[index])
-    return solutions
+                new_solution.append(node)
+        repair(graph, new_solution)
+    return new_solution
 
 def onlooker_bee_phase(
         solutions, graph, edge_list, probability_vector, best_iteration, onlooker_bees, beta):
@@ -278,6 +304,7 @@ def onlooker_bee_phase(
             solutions[index] = O
     return solutions, best_iteration
 
+
 def random_heuristic_node(graph, solution):
     random_choice = choice([1,2,3])
     heuristics = {1:{}, 2:{}, 3:{}}
@@ -287,6 +314,7 @@ def random_heuristic_node(graph, solution):
     dominated += solution
     for node in solution:
         dominated += list(graph.neighbors(node))
+    dominated = list(set(dominated))
     for node in V:
         vertex[node] = {}
         undominated_neighbors = [node for node in list(graph.neighbors(node)) if node not in dominated]
@@ -294,7 +322,7 @@ def random_heuristic_node(graph, solution):
         vertex[node]['degree'] = graph.degree(node)
         vertex[node]['weight_sum_of_non_dominated_neighbors'] = 0
         for neighbor in undominated_neighbors:
-            vertex[node]['weight_sum_of_non_dominated_neighbors'] += graph[node][neighbor]['weight']
+            vertex[node]['weight_sum_of_non_dominated_neighbors'] += graph.degree(neighbor, 'weight')
     for node in vertex:
         heuristics[1][node] = vertex[node]['degree']/vertex[node]['weight_sum']
         heuristics[2][node] = vertex[node]['weight_sum_of_non_dominated_neighbors']/vertex[node]['weight_sum']
@@ -302,16 +330,15 @@ def random_heuristic_node(graph, solution):
     return max(heuristics[random_choice], key=heuristics[random_choice].get)
 
 def heuristic_improv(graph, solution):
-    heuristics = {1:{}}
-    V = solution
+    heuristics = {}
     vertex = {}
-    for node in V:
+    for node in solution:
         vertex[node] = {}
         vertex[node]['weight_sum'] = graph.degree(node, 'weight')
         vertex[node]['degree'] = graph.degree(node)
     for node in vertex:
-        heuristics[1][node] = vertex[node]['weight_sum']/vertex[node]['degree']
-    return max(heuristics[1], key=heuristics[1].get)
+        heuristics[node] = vertex[node]['weight_sum']/vertex[node]['degree']
+    return max(heuristics, key=heuristics.get)
 
 def test_output(test_n, edge_list):
     output = {}
