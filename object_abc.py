@@ -20,8 +20,8 @@ def main():
     start_time = time.time()
     #Input
     global input_dir
-    input_dir = sys.argv[1]
-    output_dir = sys.argv[2]
+    input_dir = Path(os.path.abspath(sys.argv[1]))
+    output_dir = Path(os.path.abspath(sys.argv[2]))
     graphs = get_graphs(input_dir)
     #Set parameters as global variables
     global population_size, max_trials, max_iterations, onlooker_bees, d, best_n
@@ -40,10 +40,10 @@ def main():
     mu2 = 0.5
     small_value = 0.05
     
-    ray.init(num_cpus=16)
+    ray.init(num_cpus=int(sys.argv[3]))
     global mds
     mds = get_mds(graphs)
-    #ray.shutdown()
+    ray.shutdown()
     isol_nodes = get_isolated_nodes(graphs)
     double_list = get_doublets(graphs)
     remove_doublets(graphs, mds)
@@ -254,10 +254,10 @@ def get_mds(graphs):
 
 def get_graphs(directory):
     graphs = {}
-    for i in range(0,len(os.listdir(directory))): #iterate over files in directory
-        if os.listdir(directory)[i].endswith(".csv"):
-            graph_name = os.path.splitext(os.listdir(directory)[i])[0] #set name of graph as filename without extension
-            edge_list = pd.read_csv(str(directory + "/" + os.listdir(directory)[i])) #import edge list
+    for file in directory.iterdir(): #iterate over files in directory
+        if str(file).endswith(".csv"):
+            graph_name = file.stem #set name of graph as filename without extension
+            edge_list = pd.read_csv(file) #import edge list
             edge_list = edge_list[edge_list['Parm1'] != edge_list['Parm2']]
             G = nx.from_pandas_edgelist(edge_list, source = 'Parm1', target = 'Parm2', edge_attr = 'weight')
             graphs[graph_name] = G
@@ -288,7 +288,8 @@ def get_isolated_nodes(graphs):
 
 def analyze(graphs, ds, isol_nodes, double_list, output_dir):
     Path(output_dir).mkdir(parents = True, exist_ok = True, mode = 0o666)
-    with open(output_dir + '/{path}_ds.csv'.format(path = input_dir), 'w') as file:
+    file_path = output_dir.as_posix() + '/{path}_ds.csv'.format(path = input_dir.name)
+    with open(file_path, 'w') as file:
         file.write("subset_threshold, dominating_set, doublets, isolated_nodes\n")
         for graph in ds.keys():
             ds_list = str(ds[graph])
