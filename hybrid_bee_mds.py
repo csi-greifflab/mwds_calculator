@@ -271,6 +271,7 @@ def update_prob_v(probability_vector, solution_list):
 def onlooker_bee_phase(graph, probability_vector, solution_list):
     seed()
     for bee in range(onlooker_bees):
+        # Randomly choose a solution to explore further
         index = choice(range(len(solution_list)))
         new_solution = solution(graph, solution_list[index].mutate(probability_vector))
         new_solution.repair()
