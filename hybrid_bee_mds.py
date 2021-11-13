@@ -281,7 +281,7 @@ def onlooker_bee_phase(graph, probability_vector, solution_list):
         best_iteration = best(solution_list)
         return best_iteration, solution_list
         
-def get_mds(graphs):
+def get_mds():
     # Calculates minimum weight dominating set for each graph in parallel and stores the solutions in mds_dict
     mds_dict = {graph: abc_eda.remote(graphs[graph]) for graph in graphs}
     mds_dict = {graph: ray.get(mds_dict[graph]) for graph in graphs}
