@@ -11,7 +11,7 @@ max_trials = 25         # Depth of exploration of each individual solution
 max_iterations = 30     # Iteration number for entire algorithm
 onlooker_bees = 20      # Number of bees randomly choosing a solution to explore further
 d = 5                   # Number to determine best n solutions (best_n = population_size/d)
-
+best_n = int(round(population_size/d))
 # Probability parameters
 beta = 0.2              # Aggresiveness of solution mutations
 lmbda = 0.6             # Aggresiveness of probability_vector updates
