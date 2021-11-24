@@ -22,8 +22,8 @@ python hybrid_bee_mds.py <input_dir> <output_dir> <number_of_cpus>
 ```
 
 ### Algorithm Parameters
-"Parameter" = "default_value" # "Explanation"
-####**Integer parameters:**
+
+**Integer parameters:**
 | Parameter (= default)  | Explanation  |
 | ------------ | ------------ |
 |  population_size = 50 |  Size of initial solution_list (width)|
@@ -33,7 +33,7 @@ python hybrid_bee_mds.py <input_dir> <output_dir> <number_of_cpus>
 | d = 5   | Number to determine best n solutions (best_n = population_size/d)  |
 
 
-####**Probability parameters:**
+**Probability parameters:**
 | Parameter (= default)  | Explanation  |
 | ------------ | ------------ |
 |   beta = 0.2 |  Aggresiveness of solution mutations|
