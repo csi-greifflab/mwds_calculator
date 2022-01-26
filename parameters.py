@@ -7,8 +7,8 @@ Created on Fri Nov 12 15:28:23 2021
 
 # Integer parameters
 population_size = 50    # Size of initial solution_list (width)
-max_trials = 25         # Depth of exploration of each individual solution
-max_iterations = 30     # Iteration number for entire algorithm
+max_trials = 30         # Depth of exploration of each individual solution
+max_iterations = 768    # Iteration number for entire algorithm
 onlooker_bees = 20      # Number of bees randomly choosing a solution to explore further
 d = 5                   # Number to determine best n solutions (best_n = population_size/d)
 best_n = int(round(population_size/d))

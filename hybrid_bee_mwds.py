@@ -35,7 +35,7 @@ def main():
         output_dir,
         parameters.population_size,
         parameters.max_trials,
-        parameters.max_iterations,
+        parameters.max_iterations-1,
         parameters.onlooker_bees,
         parameters.d,
         parameters.beta,
@@ -44,6 +44,8 @@ def main():
         mu2=parameters.mu2,
         small_value=parameters.small_value
     )
+
+
 
     # Calculate MWDS in parallel
     ray.init(num_cpus=int(sys.argv[3]))
@@ -82,18 +84,21 @@ class stored_parameters:
 
     def get_graphs(self):
         graphs = {}
+        isolates = {}
         for file in self.input_dir.iterdir():  # iterate over files in directory
             if str(file).endswith(".csv"):
                 graph_name = file.stem  # set name of graph as filename without extension
                 edge_list = pd.read_csv(file)  # import edge list
-                edge_list = edge_list[edge_list['Parm1'] != edge_list['Parm2']]
                 G = nx.from_pandas_edgelist(
                     edge_list, source='Parm1', target='Parm2', edge_attr='weight')
+                G.remove_edges_from(nx.selfloop_edges(G))
+                isolates[graph_name] = list(nx.isolates(G))
+                G.remove_nodes_from(isolates[graph_name])
                 graphs[graph_name] = G
-        return graphs
+        return graphs, isolates
 
     def __post_init__(self):
-        self.graphs = self.get_graphs()
+        self.graphs, self.isolates = self.get_graphs()
         self.best_n = int(round(self.population_size/self.d))
 
 class solution_list:
@@ -331,7 +336,7 @@ class dominating_set:
         self.ds = deepcopy(ds)
         self.parameters = deepcopy(global_parameters)
         self.doublets = self.get_doublets()
-        self.isolated_nodes = self.get_isolated_nodes()
+        self.isolated_nodes = self.parameters.isolates
 
     def get_doublets(self):
         double_list = {}
@@ -359,13 +364,11 @@ class dominating_set:
     def export(self):
         self.parameters.output_dir.mkdir(parents=True, exist_ok=True)
         self.parameters.output_dir.chmod(0o776)
-        file_path = self.parameters.output_dir.as_posix(
-        ) + '/{path}_ds.csv'.format(path=self.parameters.input_dir.name)
-        file_path = "{}/{}_ds.csv".format(
-            self.parameters.output_dir.as_posix(), self.parameters.input_dir.name)
+        file_path = "{}/{}/{}_ds.csv".format(self.parameters.output_dir.as_posix(), 
+                                          self.parameters.input_dir.name,
+                                          self.parameters.input_dir.name)
         with open(file_path, 'w') as file:
-            file.write(
-                "subset_threshold, dominating_set, doublets, isolated_nodes\n")
+            file.write("subset_threshold,dominating_set,doublets,isolated_nodes\n")
             for graph in self.ds.keys():
                 ds_list = str(self.ds[graph])
                 ds_list = '"{}"'.format(ds_list[1: len(ds_list) - 1])
@@ -374,9 +377,25 @@ class dominating_set:
                     doubles_list[1: len(doubles_list) - 1])
                 isol_list = str(self.isolated_nodes[graph])
                 isol_list = '"{}"'.format(isol_list[1: len(isol_list) - 1])
-                file.write("%s,%s,%s,%s\n" %
-                           (graph, ds_list, doubles_list, isol_list))
-
+                file.write('{},{},{},{}\n'.format(graph, ds_list, doubles_list, isol_list))
+        
+        file_path = Path("{}/{}/logs/".format(
+            self.parameters.output_dir.as_posix(),
+            self.parameters.input_dir.name))
+        logs = {}
+        for file in file_path.iterdir():
+            with open(file, 'r') as f:
+                logs[file.stem] = f.read()
+            file.unlink()
+        Path.rmdir(file_path)
+        file_path = Path("{}/{}/log.csv".format(
+            self.parameters.output_dir.as_posix(),
+            self.parameters.input_dir.name))
+        with open(file_path,'w') as f:
+            f.write('graph,iterations\n')
+            for key, iterations in logs.items():
+                f.write('{},{}\n'.format(key, iterations))
+                
 
 @ray.remote
 def abc_eda(key, graph, global_parameters):
@@ -386,7 +405,9 @@ def abc_eda(key, graph, global_parameters):
 
     # Explore solutions while updating probability_vector after each iteration
     iterations = 0
-    while iterations <= global_parameters.max_iterations:
+    log_iteration = 1
+    local_iterations = global_parameters.max_iterations
+    while iterations <= local_iterations:
         iterations += 1
         for bee in hive.solutions:
             bee.emp_bee_phase(hive.probability_vector)
@@ -395,13 +416,29 @@ def abc_eda(key, graph, global_parameters):
         hive.onlooker_bee_phase()
         hive.update_prob_v()
         if hive.best_iteration.fitness_score() < hive.best_solution.fitness_score():
+            log_iteration = iterations
             hive.best_solution = deepcopy(hive.best_iteration)
             print('{}: New Best solution found after {} iterations'.format(key, iterations))
+            if iterations > local_iterations/2:
+                local_iterations += 1
+    print('Max ({}) iterations reached for {}'.format(iterations, key))
+    
+    logdir_path = Path("{}/{}/logs/".format(
+        global_parameters.output_dir.as_posix(),
+        global_parameters.input_dir.name))
+    logdir_path.mkdir(parents=True, exist_ok=True)
+    file_path = "{}/{}/logs/{}.log".format(
+        global_parameters.output_dir.as_posix(),
+        global_parameters.input_dir.name,
+        key)
+    with open(file_path,'w') as file:
+        file.write(str(log_iteration))
     return list(hive.best_solution.nodes)
 
 
 def get_mds(global_parameters):
     # Calculates minimum weight dominating set for each graph in parallel and stores the solutions in mds_dict
+    print('Global Parameters: \n{}'.format(global_parameters))
     print("Calculating MWDS for following graphs:")
     for graph in sorted(list(global_parameters.graphs)):
         print(graph)
@@ -412,20 +449,6 @@ def get_mds(global_parameters):
     mds_dict = {graph: ray.get(mds_dict[graph])
                 for graph in global_parameters.graphs}
     return mds_dict
-
-
-def get_graphs(directory):
-    graphs = {}
-    for file in directory.iterdir():  # iterate over files in directory
-        if str(file).endswith(".csv"):
-            graph_name = file.stem  # set name of graph as filename without extension
-            edge_list = pd.read_csv(file)  # import edge list
-            edge_list = edge_list[edge_list['Parm1'] != edge_list['Parm2']]
-            G = nx.from_pandas_edgelist(
-                edge_list, source='Parm1', target='Parm2', edge_attr='weight')
-            graphs[graph_name] = G
-    return graphs
-
 
 if __name__ == '__main__':
     main()
